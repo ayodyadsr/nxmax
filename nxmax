@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Usage: ./nxmax domains.txt
+
+DOMAIN_FILE="$1"
+OUT="nxmax_candidates.txt"
+CONFIRMED="nxmax_confirmed.txt"
+
+if [ -z "$DOMAIN_FILE" ] || [ ! -f "$DOMAIN_FILE" ]; then
+  echo "Usage: $0 <domain_list_file>"
+  exit 1
+fi
+
+> "$OUT"
+> "$CONFIRMED"
+
+while read -r h; do
+  [ -z "$h" ] && continue
+
+  cname=$(dig +short CNAME "$h" | tail -n1)
+  [ -z "$cname" ] && continue
+
+  # Cek pakai resolver lokal dulu
+  status_local=$(dig +noall +comment CNAME "$cname" | grep -oP 'status: \K[A-Z]+')
+
+  if [ "$status_local" = "nxmax" ]; then
+    echo "[nxmax-local] $h -> $cname" | tee -a "$OUT"
+
+    # Verifikasi ulang pakai beberapa resolver publik biar nggak false positive
+    confirmed=true
+    for resolver in 8.8.8.8 1.1.1.1 9.9.9.9; do
+      status_pub=$(dig @"$resolver" +noall +comment CNAME "$cname" | grep -oP 'status: \K[A-Z]+')
+      if [ "$status_pub" != "nxmax" ]; then
+        confirmed=false
+        break
+      fi
+    done
+
+    if [ "$confirmed" = true ]; then
+      echo "[CONFIRMED] $h -> $cname (nxmax across local + 8.8.8.8 + 1.1.1.1 + 9.9.9.9)" | tee -a "$CONFIRMED"
+    else
+      echo "  -> tidak konsisten di semua resolver, kemungkinan cache lokal, skip" 
+    fi
+  fi
+done < "$DOMAIN_FILE"
+
+echo ""
+echo "Selesai. Kandidat awal: $(wc -l < "$OUT" 2>/dev/null || echo 0), Confirmed: $(wc -l < "$CONFIRMED" 2>/dev/null || echo 0)"
